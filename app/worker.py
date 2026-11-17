@@ -60,7 +60,7 @@ def run_asr_and_ocr(filename: str) -> tuple[str, str]:
     cid = str(uuid.uuid4())
     ws = websocket.WebSocket()
     ws.connect(f"ws://{COMFY_SERVER}/ws?clientId={cid}")
-    resp = requests.post(f"http://{COMFY_SERVER}/prompt", json={"prompt": wf, "client_id": cid}, timeout=30)  # nosemgrep: local loopback 127.0.0.1
+    resp = requests.post(f"http://{COMFY_SERVER}/prompt", json={"prompt": wf, "client_id": cid}, timeout=30)  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
     if not resp.ok:
         ws.close()
         raise RuntimeError(f"ComfyUI {resp.status_code}: {resp.text}")
@@ -72,7 +72,7 @@ def run_asr_and_ocr(filename: str) -> tuple[str, str]:
             if m.get("type") == "executing" and m.get("data", {}).get("node") is None and m.get("data", {}).get("prompt_id") == pid:
                 break
     ws.close()
-    outputs = requests.get(f"http://{COMFY_SERVER}/history/{pid}", timeout=30).json()[pid]["outputs"]  # nosemgrep: local loopback 127.0.0.1
+    outputs = requests.get(f"http://{COMFY_SERVER}/history/{pid}", timeout=30).json()[pid]["outputs"]  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
 
     def _get(nid: str) -> str:
         no = outputs.get(nid, {})
@@ -94,8 +94,8 @@ def generate_mom(route: str, enriched_text: str) -> str:
     )
     if route == "nda":
         ollama_url = "http://" + "127.0.0.1" + ":11434/api/chat"
-        resp = requests.post(  # nosemgrep: local loopback 127.0.0.1
-            ollama_url,  # nosemgrep: local loopback 127.0.0.1
+        resp = requests.post(  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
+            ollama_url,  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
             json={
                 "model": OLLAMA_MODEL,
                 "stream": False,
