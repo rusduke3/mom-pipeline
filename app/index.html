@@ -1,0 +1,107 @@
+<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI MoM Enterprise</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#e2e8f0;--muted:#94a3b8;--in:#0f172a;--btn:#3b82f6;--grad:none}
+body.friday{--bg:#2a103c;--card:rgba(49,18,72,.94);--border:#f472b6;--text:#fdf4ff;--muted:#f5d0fe;--in:#1e092d;--btn:linear-gradient(90deg,#ec4899,#8b5cf6,#06b6d4);--grad:radial-gradient(circle at top right,rgba(236,72,153,.28),transparent 55%)}
+body{font-family:system-ui,sans-serif;background:var(--bg);background-image:var(--grad);color:var(--text);max-width:840px;margin:36px auto;padding:0 20px;transition:.3s}
+.card{background:var(--card);border-radius:14px;padding:28px;border:1px solid var(--border);box-shadow:0 12px 32px rgba(0,0,0,.3)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.top h2{margin:0;font-size:20px}
+.sw{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;border:1px solid var(--border);background:var(--in);cursor:pointer;font-size:13px;font-weight:600;user-select:none}
+body.friday .sw{border-color:#f472b6;box-shadow:0 0 14px rgba(244,114,182,.45)}
+label.lbl{display:block;margin-top:18px;font-weight:600;font-size:14px}
+.hint{font-size:12px;color:var(--muted);margin-top:4px}
+input[type="file"],textarea{width:100%;margin-top:8px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--in);color:var(--text);box-sizing:border-box}
+.rg{display:flex;gap:14px;margin-top:10px;flex-wrap:wrap}
+.rb{flex:1;min-width:240px;padding:14px;border-radius:10px;border:2px solid var(--border);cursor:pointer;background:var(--in)}
+.rb.nda:has(input:checked){border-color:#ef4444;background:rgba(239,68,68,.12)}
+.rb.pub:has(input:checked){border-color:#22c55e;background:rgba(34,197,94,.12)}
+button.primary{margin-top:22px;width:100%;padding:14px;border:none;border-radius:10px;background:var(--btn);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+button.primary:disabled{opacity:.55;cursor:not-allowed}
+#sb{margin-top:24px;padding:16px;border-radius:10px;background:var(--in);border:1px solid var(--border);display:none}
+.acts{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.bsec{padding:9px 15px;border-radius:8px;border:none;font-size:14px;font-weight:600;cursor:pointer;color:#fff;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.bcopy{background:#10b981}.bdl{background:#6366f1}
+pre{white-space:pre-wrap;font-family:inherit;line-height:1.55;background:var(--card);padding:16px;border-radius:8px;border:1px solid var(--border);margin:0}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:12px;background:#0284c7;color:#fff;margin-left:8px}
+.uni{display:none;font-size:22px;text-align:center;margin:8px 0;animation:b 1s infinite alternate}
+body.friday .uni.on{display:block}
+@keyframes b{from{transform:translateY(0)}to{transform:translateY(-6px)}}
+footer{margin-top:22px;text-align:center;font-size:12.5px;color:var(--muted)}
+</style></head><body>
+<div class="card">
+  <div class="top">
+    <h2>Генератор протоколов встреч (MoM)</h2>
+    <div class="sw" id="modeToggle"><span id="mIcon">💼</span><span id="mText">Режим: Понедельник</span></div>
+  </div>
+  <form id="f">
+    <label class="lbl">1. Запись встречи (MP4, MKV, MOV, WEBM, MP3, WAV, M4A):</label>
+    <input type="file" id="fi" name="file" accept=".mp4,.mkv,.avi,.mov,.webm,.mp3,.wav,.m4a,.ogg,.flac" required>
+    <div class="hint" id="fh">Максимальный размер файла: {MAX_MB} МБ</div>
+    <label class="lbl">2. Контур обработки:</label>
+    <div class="rg">
+      <label class="rb nda"><input type="radio" name="route" value="nda" checked> <b>Контур NDA (Локально)</b><br><small>Qwen 3.6 35B на RTX 3070 Ti</small></label>
+      <label class="rb pub"><input type="radio" name="route" value="public"> <b>Контур Public (Облако)</b><br><small>OpenRouter API (изолированный шлюз)</small></label>
+    </div>
+    <label class="lbl">3. Контекст встречи и глоссарий (необязательно):</label>
+    <textarea name="meeting_context" rows="3" placeholder="Участники, роли, термины (StatProc, RedOS 8, Hexagon)..."></textarea>
+    <button type="submit" class="primary" id="btn">Отправить в очередь Kafka</button>
+  </form>
+  <div id="sb">
+    <div class="uni" id="uni">🦄 ✨ 🌈 🦄 ✨ 🌈 🦄</div>
+    <div id="st">Ожидание...</div>
+    <div id="ra" style="display:none;margin-top:16px">
+      <div class="acts">
+        <button type="button" class="bsec bcopy" onclick="copyMom()">📋 Скопировать протокол</button>
+        <a id="dl" class="bsec bdl" href="#" download>📥 Скачать транскрибацию (.txt)</a>
+      </div>
+      <pre id="out"></pre>
+    </div>
+  </div>
+</div>
+<footer>© 2026 Сироткин Станислав &bull; AI MoM Enterprise Pipeline (Kafka + Redis + Dual-LLM)</footer>
+<script>
+const MAX_B = {MAX_BYTES};
+let fri = localStorage.getItem('mom_fri') === '1', t = null;
+function theme(){
+  document.body.classList.toggle('friday', fri);
+  document.getElementById('mIcon').innerText = fri ? '🦄' : '💼';
+  document.getElementById('mText').innerText = fri ? 'Режим: Пятница!' : 'Режим: Понедельник';
+  document.getElementById('btn').innerText = fri ? '🦄 Запустить магию протокола!' : 'Отправить в очередь Kafka';
+}
+theme();
+document.getElementById('modeToggle').onclick = () => { fri = !fri; localStorage.setItem('mom_fri', fri ? '1' : '0'); theme(); };
+document.getElementById('fi').onchange = (e) => {
+  const f = e.target.files[0], h = document.getElementById('fh');
+  if (!f) return;
+  const mb = (f.size / 1048576).toFixed(1);
+  h.style.color = f.size > MAX_B ? '#ef4444' : '#10b981';
+  h.innerText = f.size > MAX_B ? `Файл слишком большой (${mb} МБ). Максимум — {MAX_MB} МБ!` : `Выбран файл: ${f.name} (${mb} МБ) — лимит соблюдён`;
+};
+function copyMom(){ navigator.clipboard.writeText(document.getElementById('out').innerText); alert(fri ? '🦄 Скопировано в радужный буфер!' : 'Скопировано!'); }
+document.getElementById('f').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = document.getElementById('fi').files[0];
+  if (f && f.size > MAX_B) { alert('Превышен лимит {MAX_MB} МБ'); return; }
+  const b = document.getElementById('btn'), sb = document.getElementById('sb'), st = document.getElementById('st'), ra = document.getElementById('ra'), u = document.getElementById('uni');
+  b.disabled = true; sb.style.display = 'block'; ra.style.display = 'none'; u.classList.add('on');
+  st.innerText = fri ? '🦄 Единорожки загружают файл...' : 'Загрузка и расчёт SHA-256...';
+  const r = await fetch('/api/tasks', {method:'POST', body:new FormData(e.target)}), d = await r.json();
+  if (!r.ok) { u.classList.remove('on'); st.innerText = 'Ошибка: ' + (d.detail || 'сбой'); b.disabled = false; return; }
+  st.innerText = fri ? `🌈 Задача #${d.task_id} ускакала в очередь...` : `В очереди Kafka (ID: ${d.task_id})...`;
+  if (t) clearInterval(t);
+  t = setInterval(async () => {
+    const sr = await fetch('/api/tasks/' + d.task_id), sd = await sr.json();
+    if (sd.status === 'processing') st.innerText = (fri ? '🦄 Магия: ' : 'В работе: ') + (sd.stage || 'обработка');
+    else if (sd.status === 'completed') {
+      clearInterval(t); u.classList.remove('on');
+      const cb = sd.cache_hit === '1' ? '<span class="badge">⚡ ASR из кеша Redis</span>' : '';
+      st.innerHTML = (fri ? '🎉 Готово! Контур: <b>' : 'Готово! Контур: <b>') + sd.route.toUpperCase() + '</b>' + cb;
+      document.getElementById('out').innerText = sd.result;
+      document.getElementById('dl').href = `/api/tasks/${d.task_id}/transcript`;
+      ra.style.display = 'block'; b.disabled = false;
+    } else if (sd.status === 'failed') { clearInterval(t); u.classList.remove('on'); st.innerText = 'Ошибка (в DLQ): ' + sd.error; b.disabled = false; }
+  }, 2000);
+};
+</script></body></html>
