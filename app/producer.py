@@ -26,9 +26,15 @@ def verify_auth(request: Request, credentials: HTTPBasicCredentials = Depends(se
     if rdb.exists(ban_key):
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many failed login attempts. Try again in 15 minutes.")
 
-    u_ok = secrets.compare_digest(credentials.username.encode("utf8"), AUTH_USER.encode("utf8"))
-    p_ok = secrets.compare_digest(credentials.password.encode("utf8"), AUTH_PASS.encode("utf8"))
-    if not (u_ok and p_ok):
+    admin_ok = (
+        secrets.compare_digest(credentials.username.encode("utf8"), AUTH_USER.encode("utf8"))
+        and secrets.compare_digest(credentials.password.encode("utf8"), AUTH_PASS.encode("utf8"))
+    )
+    guest_ok = bool(GUEST_USER and GUEST_PASS) and (
+        secrets.compare_digest(credentials.username.encode("utf8"), GUEST_USER.encode("utf8"))
+        and secrets.compare_digest(credentials.password.encode("utf8"), GUEST_PASS.encode("utf8"))
+    )
+    if not (admin_ok or guest_ok):
         fails = rdb.incr(fail_key)
         rdb.expire(fail_key, 600)
         if fails >= 5:

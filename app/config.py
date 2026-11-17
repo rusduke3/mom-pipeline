@@ -52,3 +52,7 @@ OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
 
 
 OPENROUTER_PROXY_URL = os.getenv('OPENROUTER_PROXY_URL', 'socks5://127.0.0.1:10808')
+
+GUEST_USER = os.getenv('GUEST_USER', '')
+
+GUEST_PASS = os.getenv('GUEST_PASS', '')
