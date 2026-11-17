@@ -181,7 +181,7 @@ def main():
             enriched = f"{manual_block}{base_rules}\nУчастники со скриншотов: {participants}\n\nСтенограмма встречи:\n{transcript}"
             mom = generate_mom(route, enriched)
 
-            rdb.hset(f"task:{tid}", mapping={"status": "completed", "result": mom, "stage": "Готово", "cache_hit": cache_hit})
+            rdb.hset(f"task:{tid}", mapping={"status": "completed", "result": mom, "transcript": transcript, "participants": participants, "stage": "Готово", "cache_hit": cache_hit})
             c.commit(message=msg)
             print(f"✅ Задача [{tid}] выполнена! (Cache={cache_hit}, Длина={len(mom)} симв.)")
         except Exception as e:
