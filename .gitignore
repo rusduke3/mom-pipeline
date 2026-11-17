@@ -1,0 +1,36 @@
+﻿# --- Секреты и локальные конфиги ---
+.env
+.env.*
+!.env.example
+vpn/*.conf
+vpn/config.json
+vpn/servers.txt
+*.pem
+*.key
+
+# --- Python и виртуальное окружение ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.bak
+*.log
+
+# --- Медиафайлы, загрузки и локальные данные ---
+uploads/
+outputs/
+*.mp4
+*.webm
+*.mkv
+*.avi
+*.mp3
+*.wav
+*.m4a
+*.ogg
+demo_qr.png
+
+# --- IDE и ОС ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

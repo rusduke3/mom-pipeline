@@ -1,0 +1,46 @@
+﻿name: DevSecOps Security Pipeline (SAST & Secrets)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scanning:
+    name: Secret Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sast-python:
+    name: Python SAST (Bandit & Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install SAST tools
+        run: pip install bandit semgrep
+
+      - name: Run Bandit SAST
+        run: bandit -r app
+
+      - name: Run Semgrep SAST
+        run: semgrep scan --config=p/python --config=p/security-audit --error app/
