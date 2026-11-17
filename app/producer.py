@@ -2,7 +2,7 @@ from pathlib import Path
 import os, json, uuid, shutil, hashlib, secrets
 import redis
 from confluent_kafka import Producer
-from fastapi import FastAPI, File, Form, UploadFile, Depends, HTTPException, status
+from fastapi import FastAPI, File, Form, UploadFile, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from typing import Optional
@@ -18,11 +18,24 @@ security = HTTPBasic()
 rdb = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 kafka_producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
 
-def verify_auth(credentials: HTTPBasicCredentials = Depends(security)):
+def verify_auth(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    client_ip = request.headers.get("X-Real-IP") or (request.client.host if request.client else "unknown")
+    ban_key = f"auth_ban:{client_ip}"
+    fail_key = f"auth_fail:{client_ip}"
+
+    if rdb.exists(ban_key):
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many failed login attempts. Try again in 15 minutes.")
+
     u_ok = secrets.compare_digest(credentials.username.encode("utf8"), AUTH_USER.encode("utf8"))
     p_ok = secrets.compare_digest(credentials.password.encode("utf8"), AUTH_PASS.encode("utf8"))
     if not (u_ok and p_ok):
+        fails = rdb.incr(fail_key)
+        rdb.expire(fail_key, 600)
+        if fails >= 5:
+            rdb.setex(ban_key, 900, "1")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Auth failed", headers={"WWW-Authenticate": "Basic"})
+
+    rdb.delete(fail_key)
     return credentials.username
 
 HTML_PAGE = Path("app/index.html").read_text(encoding="utf-8").replace("{MAX_MB}", str(MAX_FILE_SIZE_MB)).replace("{MAX_BYTES}", str(MAX_FILE_SIZE_BYTES))
