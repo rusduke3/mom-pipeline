@@ -27,16 +27,20 @@ def cleanup_media_files(filename: str) -> None:
             except OSError:
                 pass
 
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".ogg", ".flac", ".aac", ".wma"}
+
 def prepare_mp4(filename: str) -> str:
-    src = COMFY_INPUT_DIR / filename
+    src = (COMFY_INPUT_DIR / filename).resolve()
     mp4_name = Path(filename).stem + ".mp4"
-    dst = COMFY_INPUT_DIR / mp4_name
-    if src.suffix.lower() != ".mp4":
+    dst = (COMFY_INPUT_DIR / mp4_name).resolve()
+    ext = src.suffix.lower()
+    if ext != ".mp4":
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        subprocess.run(  # nosec B603
-            [ffmpeg_exe, "-y", "-i", str(src), "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(dst)],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        if ext in AUDIO_EXTS:
+            cmd = [ffmpeg_exe, "-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1", "-i", str(src), "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(dst)]
+        else:
+            cmd = [ffmpeg_exe, "-y", "-i", str(src), "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(dst)]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
     for d in INPUT_DIRS:
         target = d / mp4_name
         if target != dst:
@@ -171,7 +175,8 @@ def main():
             cache_key = f"asr_cache:{fhash}" if fhash else ""
             cached = rdb.hgetall(cache_key) if cache_key else {}
 
-            if cached and cached.get("transcript"):
+            force_recompute = bool(task.get("force_recompute", False))
+            if cached and cached.get("transcript") and not force_recompute:
                 transcript = cached["transcript"]
                 participants = cached.get("participants", "")
                 cache_hit = "1"

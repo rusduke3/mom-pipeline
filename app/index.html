@@ -46,6 +46,7 @@ footer{margin-top:22px;text-align:center;font-size:12.5px;color:var(--muted)}
     </div>
     <label class="lbl">3. Контекст встречи и глоссарий (необязательно):</label>
     <textarea name="meeting_context" rows="3" placeholder="Участники, роли, термины (StatProc, RedOS 8, Hexagon)..."></textarea>
+    <label style="display:flex;align-items:center;gap:8px;margin:12px 0;font-size:14px;cursor:pointer;"><input type="checkbox" name="force_recompute" value="true" style="width:16px;height:16px;margin:0;"> Игнорировать кеш (пересчитать ASR заново)</label>
     <button type="submit" class="primary" id="btn">Отправить в очередь Kafka</button>
   </form>
   <div id="sb">

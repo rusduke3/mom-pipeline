@@ -85,6 +85,7 @@ async def create_task(file: UploadFile = File(...), route: str = Form("nda"), me
         "file_hash": file_hash,
         "route": route,
         "meeting_context": (meeting_context or "").strip(),
+        "force_recompute": bool(force_recompute),
     }
     rdb.hset(f"task:{task_id}", mapping={"status": "queued", "route": route, "stage": "В очереди Kafka"})
     kafka_producer.produce(KAFKA_TOPIC, key=task_id.encode("utf-8"), value=json.dumps(payload, ensure_ascii=False).encode("utf-8"))
