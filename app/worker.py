@@ -188,7 +188,7 @@ def generate_mom(route: str, enriched_text: str) -> str:
                 "model": OLLAMA_MODEL,
                 "stream": False,
                 "think": False,
-                "keep_alive": "2m",
+                "keep_alive": 0,
                 "options": {"num_ctx": 32768, "num_predict": 4096, "temperature": 0.1},
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT_MOM},
