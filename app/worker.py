@@ -22,6 +22,11 @@ import requests
 import imageio_ffmpeg
 from openai import OpenAI
 from confluent_kafka import Consumer, Producer
+import torch
+_torch_lib = Path(torch.__file__).parent / "lib"
+if _torch_lib.exists() and hasattr(os, "add_dll_directory"):
+    os.add_dll_directory(str(_torch_lib))
+os.environ["PATH"] = str(_torch_lib) + os.pathsep + os.environ.get("PATH", "")
 from faster_whisper import WhisperModel
 
 from app.config import (
