@@ -243,6 +243,9 @@ def main():
     })
     c.subscribe([KAFKA_TOPIC])
     print("Direct Python Worker запущен (без ComfyUI, Whisper CUDA + Ollama VLM/LLM)...")
+    for k in rdb.scan_iter("task:*"):
+        if rdb.hget(k, "status") in ("processing", "queued"):
+            rdb.hset(k, mapping={"status": "failed", "error": "Задача прервана перезапуском воркера"})
 
     while True:
         msg = c.poll(1.0)
