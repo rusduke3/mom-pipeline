@@ -1,31 +1,50 @@
-﻿from pathlib import Path
+import os
+from pathlib import Path
 from dotenv import load_dotenv
 
+# Загружаем переменные окружения из .env в корне проекта
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=True)
-import os, re, json, time, uuid, random, shutil, secrets
-from pathlib import Path
-from typing import Optional
-import redis, requests, websocket
-from openai import OpenAI
-from confluent_kafka import Consumer, Producer, KafkaError
-from fastapi import FastAPI, File, Form, UploadFile, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
-KAFKA_BOOTSTRAP = "localhost:9092"
-KAFKA_TOPIC = "mom-tasks"
-KAFKA_DLQ_TOPIC = "mom-tasks-dlq"
-KAFKA_GROUP = "mom-workers-group"
-REDIS_URL = "redis://localhost:6379/0"
-COMFY_SERVER = "127.0.0.1:8188"
-WORKFLOW_PATH = Path("app/workflow_api.json")
-COMFY_INPUT_DIR = Path(r"C:\Users\storm\AppData\Local\Comfy-Desktop\ComfyUI-Installs\ComfyUI\ComfyUI\input")
-OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
-OLLAMA_MODEL = "qwen3.6:35b"
+# === Настройки брокера сообщений (Apache Kafka) и кеша (Redis) ===
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "mom-tasks")
+KAFKA_DLQ_TOPIC = os.getenv("KAFKA_DLQ_TOPIC", "mom-tasks-dlq")
+KAFKA_GROUP = os.getenv("KAFKA_GROUP", "mom-workers-group")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+# Локальная директория для временной обработки медиафайлов (очищается после каждой задачи)
+TEMP_MEDIA_DIR = BASE_DIR / "tmp_media"
+
+# === Настройки контура NDA (локальный инференс через Ollama) ===
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.6:35b")
+VLM_MODEL_ID = os.getenv("VLM_MODEL_ID", "qwen2.5vl:7b")
+WHISPER_MODEL_ID = os.getenv("WHISPER_MODEL_ID", str(BASE_DIR / "models" / "whisper-ru-ct2"))
+
+# === Настройки контура Public (облачный API через изолированный SOCKS5-прокси) ===
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
+OPENROUTER_PROXY_URL = os.getenv("OPENROUTER_PROXY_URL", "socks5://127.0.0.1:10808")
+
+# === Учётные данные веб-интерфейса (HTTP Basic Auth) ===
 AUTH_USER = os.getenv("WEB_ADMIN_USER", "admin")
 AUTH_PASS = os.getenv("WEB_ADMIN_PASSWORD", "")
+GUEST_USER = os.getenv("GUEST_USER", "")
+GUEST_PASS = os.getenv("GUEST_PASS", "")
 
+# Правила разделения ролей (Заказчик vs Подрядчик) по формату имени со скриншотов ВКС
+PARTICIPANT_RULES = """АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ КОМПАНИИ И РОЛЕЙ ПО ФОРМАТУ ИМЕНИ С ЭКРАНА:
+1. Если в списке участников с экрана человек записан ПОЛНЫМ ФИО на кириллице (Фамилия Имя Отчество из трёх слов, например: «Сироткин Станислав Валерьевич») — это сотрудник нашей компании t2 (сторона Заказчика).
+2. Если участник записан иначе — без отчества (только Имя и Фамилия), только именем/инициалами или на латинице (например: «Валерий Канаев», «Andrey Kharitonov», «EM») — это внешний участник (сторона Подрядчика / Вендора).
+3. Всегда распределяй задачи, ответственность и приемку работ строго с учетом этого разделения: сотрудники t2 (полное ФИО на русском) выступают как Заказчик, внешние участники — как Подрядчик/Вендор (название компании-вендора бери из контекста разговора).
+4. Никогда не объединяй имя одного участника с фамилией другого.
+5. Исправляй очевидные фонетические искажения распознавания речи по смыслу (например, «протокол одногласия» -> «протокол разногласий», «Телемаст» -> «Яндекс Телемост»).
+
+Участники:"""
+
+# Основной системный промпт для формирования протокола встречи (MoM)
 SYSTEM_PROMPT_MOM = """Ты — опытный технический руководитель проектов (Technical PM). Твоя задача — составить точный, сухой и технически достоверный протокол рабочей встречи (MoM) на русском языке на основе сырой стенограммы и переданного справочника участников.
 
 ПРАВИЛА СТРОГОЙ ДОСТОВЕРНОСТИ:
@@ -44,15 +63,3 @@ SYSTEM_PROMPT_MOM = """Ты — опытный технический руков
 - **4. Открытые вопросы и риски** (технические и организационные риски с указанием влияния и мер митигации).
 
 Оформление списков: внутренние пункты списка заканчивай точкой с запятой, последний пункт — точкой."""
-
-# Настройки облачного контура Public (OpenRouter через официальный OpenAI SDK)
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODEL = "google/gemma-4-31b-it:free"
-
-
-OPENROUTER_PROXY_URL = os.getenv('OPENROUTER_PROXY_URL', 'socks5://127.0.0.1:10808')
-
-GUEST_USER = os.getenv('GUEST_USER', '')
-
-GUEST_PASS = os.getenv('GUEST_PASS', '')

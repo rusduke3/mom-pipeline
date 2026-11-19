@@ -72,7 +72,7 @@ function theme(){
   document.getElementById('btn').innerText = fri ? '🦄 Запустить магию протокола!' : 'Отправить в очередь Kafka';
 }
 theme();
-document.getElementById('modeToggle').onclick = () => { fri = !fri; localStorage.setItem('mom_fri', fri ? '1' : '0'); theme(); };
+document.getElementById('modeToggle').onclick = () => { fri = !fri; localStorage.setItem('mom_fri', fri ? '1' : '0'); theme(); const sid = localStorage.getItem('mom_last_task'); if (sid) pollTask(sid); };
 document.getElementById('fi').onchange = (e) => {
   const f = e.target.files[0], h = document.getElementById('fh');
   if (!f) return;
