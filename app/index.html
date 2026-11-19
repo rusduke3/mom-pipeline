@@ -55,7 +55,7 @@ footer{margin-top:22px;text-align:center;font-size:12.5px;color:var(--muted)}
     <div id="ra" style="display:none;margin-top:16px">
       <div class="acts">
         <button type="button" class="bsec bcopy" onclick="copyMom()">📋 Скопировать протокол</button>
-        <a id="dl" class="bsec bdl" href="#" download>📥 Скачать транскрибацию (.txt)</a>
+        <a id="dl" class="bsec bdl" href="#" download>📥 Скачать транскрибацию (.txt)</a><button type="button" class="bsec" onclick="resetSession()">🔄 Новая задача</button>
       </div>
       <pre id="out"></pre>
     </div>
@@ -81,6 +81,47 @@ document.getElementById('fi').onchange = (e) => {
   h.innerText = f.size > MAX_B ? `Файл слишком большой (${mb} МБ). Максимум — {MAX_MB} МБ!` : `Выбран файл: ${f.name} (${mb} МБ) — лимит соблюдён`;
 };
 function copyMom(){ navigator.clipboard.writeText(document.getElementById('out').innerText); alert(fri ? '🦄 Скопировано в радужный буфер!' : 'Скопировано!'); }
+function resetSession(){
+  if (t) clearInterval(t);
+  localStorage.removeItem('mom_last_task');
+  document.getElementById('sb').style.display = 'none';
+  document.getElementById('ra').style.display = 'none';
+  document.getElementById('btn').disabled = false;
+  document.getElementById('f').reset();
+  document.getElementById('fh').innerText = '';
+}
+function pollTask(taskId){
+  const b = document.getElementById('btn'), sb = document.getElementById('sb'), st = document.getElementById('st'), ra = document.getElementById('ra'), u = document.getElementById('uni');
+  sb.style.display = 'block';
+  if (t) clearInterval(t);
+  const check = async () => {
+    try {
+      const sr = await fetch('/api/tasks/' + taskId);
+      if (sr.status === 404) { resetSession(); return; }
+      const sd = await sr.json();
+      if (sd.status === 'queued') {
+        b.disabled = true; u.classList.add('on');
+        st.innerText = fri ? `🌈 Задача #${taskId} ждёт в очереди...` : `В очереди Kafka (ID: ${taskId})...`;
+      } else if (sd.status === 'processing') {
+        b.disabled = true; u.classList.add('on');
+        st.innerText = (fri ? '🦄 Магия: ' : 'В работе: ') + (sd.stage || 'обработка');
+      } else if (sd.status === 'completed') {
+        clearInterval(t); u.classList.remove('on');
+        const cb = sd.cache_hit === '1' ? '<span class="badge">⚡ ASR из кеша Redis</span>' : '';
+        st.innerHTML = (fri ? '🎉 Готово! Контур: <b>' : 'Готово! Контур: <b>') + (sd.route || '').toUpperCase() + '</b>' + cb;
+        document.getElementById('out').innerText = sd.result;
+        document.getElementById('dl').href = `/api/tasks/${taskId}/transcript`;
+        ra.style.display = 'block'; b.disabled = false;
+      } else if (sd.status === 'failed') {
+        clearInterval(t); u.classList.remove('on');
+        st.innerText = 'Ошибка (в DLQ): ' + sd.error;
+        b.disabled = false;
+      }
+    } catch (err) {}
+  };
+  check();
+  t = setInterval(check, 2000);
+}
 document.getElementById('f').onsubmit = async (e) => {
   e.preventDefault();
   const f = document.getElementById('fi').files[0];
@@ -90,19 +131,9 @@ document.getElementById('f').onsubmit = async (e) => {
   st.innerText = fri ? '🦄 Единорожки загружают файл...' : 'Загрузка и расчёт SHA-256...';
   const r = await fetch('/api/tasks', {method:'POST', body:new FormData(e.target)}), d = await r.json();
   if (!r.ok) { u.classList.remove('on'); st.innerText = 'Ошибка: ' + (d.detail || 'сбой'); b.disabled = false; return; }
-  st.innerText = fri ? `🌈 Задача #${d.task_id} ускакала в очередь...` : `В очереди Kafka (ID: ${d.task_id})...`;
-  if (t) clearInterval(t);
-  t = setInterval(async () => {
-    const sr = await fetch('/api/tasks/' + d.task_id), sd = await sr.json();
-    if (sd.status === 'processing') st.innerText = (fri ? '🦄 Магия: ' : 'В работе: ') + (sd.stage || 'обработка');
-    else if (sd.status === 'completed') {
-      clearInterval(t); u.classList.remove('on');
-      const cb = sd.cache_hit === '1' ? '<span class="badge">⚡ ASR из кеша Redis</span>' : '';
-      st.innerHTML = (fri ? '🎉 Готово! Контур: <b>' : 'Готово! Контур: <b>') + sd.route.toUpperCase() + '</b>' + cb;
-      document.getElementById('out').innerText = sd.result;
-      document.getElementById('dl').href = `/api/tasks/${d.task_id}/transcript`;
-      ra.style.display = 'block'; b.disabled = false;
-    } else if (sd.status === 'failed') { clearInterval(t); u.classList.remove('on'); st.innerText = 'Ошибка (в DLQ): ' + sd.error; b.disabled = false; }
-  }, 2000);
+  localStorage.setItem('mom_last_task', d.task_id);
+  pollTask(d.task_id);
 };
+const savedId = localStorage.getItem('mom_last_task');
+if (savedId) pollTask(savedId);
 </script></body></html>

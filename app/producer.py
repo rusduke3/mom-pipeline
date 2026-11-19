@@ -1,3 +1,9 @@
+import builtins
+from datetime import datetime
+_orig_print = builtins.print
+def print(*args, **kwargs):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _orig_print(f"[{ts}]", *args, **kwargs)
 from pathlib import Path
 import os, json, uuid, shutil, hashlib, secrets
 import redis
@@ -51,7 +57,7 @@ async def index(user: str = Depends(verify_auth)):
     return HTML_PAGE
 
 @app.post("/api/tasks")
-async def create_task(file: UploadFile = File(...), route: str = Form("nda"), meeting_context: Optional[str] = Form(""), user: str = Depends(verify_auth)):
+async def create_task(file: UploadFile = File(...), route: str = Form("nda"), meeting_context: Optional[str] = Form(""), force_recompute: bool = Form(False), user: str = Depends(verify_auth)):
     _, raw_ext = os.path.splitext(file.filename or "")
     ext = raw_ext.lower() or ".mp4"
     if ext not in ALLOWED_EXTENSIONS:

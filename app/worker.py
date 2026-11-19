@@ -1,165 +1,174 @@
-import httpx
-from app.config import OPENROUTER_PROXY_URL
-import re, json, uuid, shutil
-import subprocess  # nosec B404: ???????????? ?????? ??? ??????????? ?????? ffmpeg ??????? ??????????
+import builtins
+from datetime import datetime
+_orig_print = builtins.print
+def print(*args, **kwargs):
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _orig_print(f"[{ts}]", *args, **kwargs)
+import os
+import re
+import gc
+import json
+import time
+import base64
+import subprocess  # nosec B404: используется только для локального вызова ffmpeg через список аргументов
 from pathlib import Path
-import redis, requests, websocket, imageio_ffmpeg
+
+import httpx
+import redis
+import requests
+import imageio_ffmpeg
+os.environ["PATH"] = str(Path(imageio_ffmpeg.get_ffmpeg_exe()).parent) + os.pathsep + os.environ.get("PATH", "")
 from openai import OpenAI
 from confluent_kafka import Consumer, Producer
-from app.config import *
+import torch
+from faster_whisper import WhisperModel
+
+from app.config import (
+    REDIS_URL,
+    KAFKA_BOOTSTRAP,
+    KAFKA_TOPIC,
+    KAFKA_DLQ_TOPIC,
+    KAFKA_GROUP,
+    COMFY_INPUT_DIR,
+    OLLAMA_MODEL,
+    OPENROUTER_MODEL,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_PROXY_URL,
+    SYSTEM_PROMPT_MOM,
+    WORKFLOW_PATH,
+)
 
 rdb = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 dlq_producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
 
-COMFY_BASE = Path(r"C:\Users\storm\AppData\Local\Comfy-Desktop")
-INPUT_DIRS = [p for p in COMFY_BASE.rglob("input") if p.is_dir()] or [COMFY_INPUT_DIR]
 CACHE_TTL_SEC = 7 * 24 * 3600
-import time
 MAX_RETRIES = 3
 NON_RETRYABLE_ERRORS = ("Пустая стенограмма", "Invalid data found", "No such file")
+AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".ogg", ".flac", ".aac", ".wma"}
+
+WHISPER_MODEL_ID = os.getenv("WHISPER_MODEL_ID", str(Path(__file__).resolve().parent.parent / "models" / "whisper-ru-ct2"))
+VLM_MODEL_ID = os.getenv("VLM_MODEL_ID", "qwen2.5vl:7b")
+OLLAMA_API_BASE = os.getenv("OLLAMA_API_BASE", "http://127.0.0.1:11434")
+
+def free_vram() -> None:
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except ImportError:
+        pass
 
 def cleanup_media_files(filename: str) -> None:
     stem = Path(filename).stem
-    for d in {COMFY_INPUT_DIR, *INPUT_DIRS}:
-        for f in (d / filename, d / f"{stem}.mp4"):
+    for pattern in (filename, f"{stem}.wav", f"{stem}_frame_*.jpg"):
+        for f in COMFY_INPUT_DIR.glob(pattern):
             try:
                 f.unlink(missing_ok=True)
             except OSError:
                 pass
+def extract_wav(src_path: Path) -> Path:
+    wav_path = src_path.with_suffix(".wav")
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [ffmpeg_exe, "-y", "-i", str(src_path), "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", str(wav_path)]
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
+    return wav_path
 
-AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".ogg", ".flac", ".aac", ".wma"}
+def extract_video_frames(src_path: Path, max_frames: int = 3) -> list[str]:
+    if src_path.suffix.lower() in AUDIO_EXTS:
+        return []
+    ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    stem = src_path.stem
+    frame_pattern = src_path.parent / f"{stem}_frame_%02d.jpg"
+    cmd = [ffmpeg_exe, "-y", "-i", str(src_path), "-vf", "fps=1/20,scale=1280:-1", "-frames:v", str(max_frames), "-q:v", "4", str(frame_pattern)]
+    subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
+    frames = []
+    for img_path in sorted(src_path.parent.glob(f"{stem}_frame_*.jpg")):
+        try:
+            frames.append(base64.b64encode(img_path.read_bytes()).decode("ascii"))
+        except OSError:
+            pass
+    return frames
 
-def prepare_mp4(filename: str) -> str:
-    src = (COMFY_INPUT_DIR / filename).resolve()
-    mp4_name = Path(filename).stem + ".mp4"
-    dst = (COMFY_INPUT_DIR / mp4_name).resolve()
-    ext = src.suffix.lower()
-    if ext != ".mp4":
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if ext in AUDIO_EXTS:
-            cmd = [ffmpeg_exe, "-y", "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1", "-i", str(src), "-c:v", "libx264", "-tune", "stillimage", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(dst)]
-        else:
-            cmd = [ffmpeg_exe, "-y", "-i", str(src), "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(dst)]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
-    for d in INPUT_DIRS:
-        target = d / mp4_name
-        if target != dst:
-            shutil.copy2(dst, target)
-    return mp4_name
+def transcribe_audio_direct(wav_path: Path) -> str:
+    print(f"Загрузка CTranslate2 Whisper ({WHISPER_MODEL_ID}) в GPU (int8_float16)...")
+    model = WhisperModel(WHISPER_MODEL_ID, device="cuda", compute_type="int8_float16")
+    try:
+        segments, _ = model.transcribe(str(wav_path), language="ru", beam_size=5, vad_filter=True, vad_parameters={"min_silence_duration_ms": 500})
+        return "\n".join(seg.text.strip() for seg in segments if seg.text.strip())
+    finally:
+        del model
+        free_vram()
+        print("Whisper выгружен из VRAM.")
+
+def extract_participants_vlm(frames_b64: list[str]) -> str:
+    if not frames_b64:
+        return ""
+    print(f"Распознавание участников на {len(frames_b64)} кадрах через {VLM_MODEL_ID}...")
+    prompt = "Посмотри на скриншоты видеоконференции. Выпиши исключительно список имён, фамилий и ролей участников встречи, которые видны в подписях к окнам или в списке участников. Если имён на экране нет, напиши: Не определены с экрана."
+    try:
+        resp = requests.post(  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
+            f"{OLLAMA_API_BASE}/api/generate",
+            json={"model": VLM_MODEL_ID, "prompt": prompt, "images": frames_b64, "stream": False, "keep_alive": 0, "options": {"temperature": 0.1}},
+            timeout=120,
+        )
+        if resp.ok:
+            return resp.json().get("response", "").strip()
+    except Exception as e:
+        print(f"VLM OCR пропущен ({e})")
+    return ""
 
 def run_asr_and_ocr(filename: str) -> tuple[str, str]:
-    mp4_filename = prepare_mp4(filename)
-    with WORKFLOW_PATH.open("r", encoding="utf-8") as f:
-        wf = json.load(f)
-
-    if "23" in wf:
-        wf["23"]["inputs"]["video"] = mp4_filename
-
-    # Всегда вырезаем облачную LLM из ComfyUI — ComfyUI делает только Whisper + OCR участников
-    for nid in ["13", "28", "33", "34", "36", "39"]:
-        wf.pop(nid, None)
-    wf["98"] = {"class_type": "PreviewAny", "inputs": {"source": ["19", 0]}}
-    wf["99"] = {"class_type": "PreviewAny", "inputs": {"source": ["26", 0]}}
-
-    cid = str(uuid.uuid4())
-    ws = websocket.WebSocket()
-    ws.connect(f"ws://{COMFY_SERVER}/ws?clientId={cid}")
-    resp = requests.post(f"http://{COMFY_SERVER}/prompt", json={"prompt": wf, "client_id": cid}, timeout=30)  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
-    if not resp.ok:
-        ws.close()
-        raise RuntimeError(f"ComfyUI {resp.status_code}: {resp.text}")
-    pid = resp.json()["prompt_id"]
-    while True:
-        out = ws.recv()
-        if isinstance(out, str):
-            m = json.loads(out)
-            if m.get("type") == "executing" and m.get("data", {}).get("node") is None and m.get("data", {}).get("prompt_id") == pid:
-                break
-    ws.close()
-    outputs = requests.get(f"http://{COMFY_SERVER}/history/{pid}", timeout=30).json()[pid]["outputs"]  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
-
-    def _get(nid: str) -> str:
-        no = outputs.get(nid, {})
-        for k in ("text", "string"):
-            v = no.get(k)
-            if isinstance(v, list) and v:
-                return str(v.pop(0))
-            if isinstance(v, str) and v:
-                return v
-        return ""
-
-    return _get("98"), _get("99")
+    src_path = (COMFY_INPUT_DIR / filename).resolve()
+    if not src_path.exists():
+        raise FileNotFoundError(f"No such file: {src_path}")
+    wav_path = extract_wav(src_path)
+    transcript = transcribe_audio_direct(wav_path)
+    frames_b64 = extract_video_frames(src_path, max_frames=3)
+    participants = extract_participants_vlm(frames_b64)
+    return transcript, participants
 
 def generate_mom(route: str, enriched_text: str) -> str:
-    user_prompt = (
-        "Составь строгий технический протокол рабочей встречи (MoM) по шаблону ниже. "
-        "Запрещены вступительные фразы, таблицы и эмодзи. Начинай ответ строго со строки **Протокол рабочей встречи (MoM)**.\n\n"
-        f"{SYSTEM_PROMPT_MOM}\n\n=== ИСХОДНЫЕ ДАННЫЕ ВСТРЕЧИ ===\n{enriched_text}"
-    )
+    user_prompt = f"Составь строгий технический протокол рабочей встречи (MoM) по шаблону ниже. Запрещены вступительные фразы, таблицы и эмодзи. Начинай ответ строго со строки **Протокол рабочей встречи (MoM)**.\n\n{SYSTEM_PROMPT_MOM}\n\n=== ИСХОДНЫЕ ДАННЫЕ ВСТРЕЧИ ===\n{enriched_text}"
     if route == "nda":
-        ollama_url = "http://" + "127.0.0.1" + ":11434/api/chat"
         resp = requests.post(  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
-            ollama_url,  # nosemgrep: python.lang.security.audit.insecure-transport.requests.request-with-http.request-with-http
-            json={
-                "model": OLLAMA_MODEL,
-                "stream": False,
-                "think": False,
-                "options": {"num_ctx": 32768, "num_predict": 4096, "temperature": 0.1},
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT_MOM},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
+            f"{OLLAMA_API_BASE}/api/chat",
+            json={"model": OLLAMA_MODEL, "stream": False, "think": False, "keep_alive": "2m", "options": {"num_ctx": 32768, "num_predict": 4096, "temperature": 0.1}, "messages": [{"role": "system", "content": SYSTEM_PROMPT_MOM}, {"role": "user", "content": user_prompt}]},
             timeout=600,
         )
         resp.raise_for_status()
         raw = resp.json().get("message", {}).get("content", "")
     else:
         client = OpenAI(http_client=httpx.Client(proxy=OPENROUTER_PROXY_URL, timeout=120.0) if OPENROUTER_PROXY_URL else None, base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY)
-        candidates = [
-            "nvidia/nemotron-3-ultra-550b-a55b:free",
-            "inclusionai/ling-3.2-flash:free",
-            "google/gemma-4-26b-a4b-it:free",
-            "baidu/ernie-5.5-flash-preview:free",
-            "nvidia/nemotron-3.5-super-vl:free",
-            "google/gemma-4-31b-it:free",
-        ]
-        last_err = None
-        raw = ""
+        candidates = ["nvidia/nemotron-3-ultra-550b-a55b:free", "inclusionai/ling-3.2-flash:free", "google/gemma-4-26b-a4b-it:free", "baidu/ernie-5.5-flash-preview:free", "nvidia/nemotron-3.5-super-vl:free", "google/gemma-4-31b-it:free"]
+        last_err, raw = None, ""
         for m in candidates:
             try:
-                res = client.chat.completions.create(
-                    model=m,
-                    temperature=0.1,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT_MOM},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                )
+                res = client.chat.completions.create(model=m, temperature=0.1, messages=[{"role": "system", "content": SYSTEM_PROMPT_MOM}, {"role": "user", "content": user_prompt}])
                 raw = res.choices.pop(0).message.content or ""
                 if raw.strip():
-                    print(f"Облачный ответ получен от модели: {m}")
                     break
             except Exception as e:
-                print(f"Модель {m} вернула ошибку ({e}), пробую следующую...")
                 last_err = e
         if not raw.strip():
-            raise RuntimeError(f"Все облачные модели перегружены (429). Последняя ошибка: {last_err}")
+            raise RuntimeError(f"Все облачные модели перегружены: {last_err}")
     return re.sub(r"(?s)<think>.*?</think>\s*", "", raw).strip()
+def load_base_rules() -> str:
+    if WORKFLOW_PATH.exists():
+        try:
+            with WORKFLOW_PATH.open("r", encoding="utf-8") as f:
+                return json.load(f).get("37", {}).get("inputs", {}).get("value", "")
+        except Exception as e:
+            print(f"Не удалось загрузить базовые правила: {e}")
+    return ""
 
 def main():
-    c = Consumer({
-        "bootstrap.servers": KAFKA_BOOTSTRAP,
-        "group.id": KAFKA_GROUP,
-        "auto.offset.reset": "earliest",
-        "enable.auto.commit": False,
-        "max.poll.interval.ms": 1800000,  # 30 минут на тяжёлые задачи без вылета из группы
-    })
+    c = Consumer({"bootstrap.servers": KAFKA_BOOTSTRAP, "group.id": KAFKA_GROUP, "auto.offset.reset": "earliest", "enable.auto.commit": False, "max.poll.interval.ms": 1800000})
     c.subscribe([KAFKA_TOPIC])
-    print(f"Kafka Worker запущен (max.poll.interval=30m, SHA-256 Redis Cache активен)...")
-
-    with WORKFLOW_PATH.open("r", encoding="utf-8") as f:
-        base_rules = json.load(f).get("37", {}).get("inputs", {}).get("value", "")
+    print("Direct Python Worker запущен (без ComfyUI, Whisper CUDA + Ollama VLM/LLM)...")
+    base_rules = load_base_rules()
 
     while True:
         msg = c.poll(1.0)
@@ -167,23 +176,20 @@ def main():
             continue
         task = json.loads(msg.value().decode("utf-8"))
         tid, route, fname = task["task_id"], task["route"], task["filename"]
-        fhash = task.get("file_hash", "")
-        ctx = task.get("meeting_context", "")
+        fhash, ctx = task.get("file_hash", ""), task.get("meeting_context", "")
         print(f"\nЗадача [{tid}] | Контур: {route.upper()} | Hash: {fhash[:10]}")
 
         try:
             cache_key = f"asr_cache:{fhash}" if fhash else ""
             cached = rdb.hgetall(cache_key) if cache_key else {}
-
             force_recompute = bool(task.get("force_recompute", False))
+
             if cached and cached.get("transcript") and not force_recompute:
-                transcript = cached["transcript"]
-                participants = cached.get("participants", "")
-                cache_hit = "1"
-                print(f"⚡ HIT кеша Redis для {fhash[:10]} — пропускаем Whisper и OCR!")
+                transcript, participants, cache_hit = cached["transcript"], cached.get("participants", ""), "1"
+                print(f"HIT кеша Redis для {fhash[:10]} — пропускаем Whisper и VLM!")
             else:
                 cache_hit = "0"
-                rdb.hset(f"task:{tid}", mapping={"status": "processing", "stage": "Транскрибация Whisper и OCR участников (ComfyUI)"})
+                rdb.hset(f"task:{tid}", mapping={"status": "processing", "stage": "Транскрибация Whisper (GPU) и распознавание участников"})
                 transcript, participants = run_asr_and_ocr(fname)
                 if not transcript.strip():
                     raise RuntimeError("Пустая стенограмма после Whisper")
@@ -193,19 +199,11 @@ def main():
 
             model_label = OLLAMA_MODEL if route == "nda" else OPENROUTER_MODEL
             rdb.hset(f"task:{tid}", mapping={"status": "processing", "stage": f"Генерация протокола ({model_label})"})
-
             manual_block = f"Дополнительный контекст от пользователя:\n{ctx}\n\n" if ctx else ""
             enriched = f"{manual_block}{base_rules}\nУчастники со скриншотов: {participants}\n\nСтенограмма встречи:\n{transcript}"
             mom = generate_mom(route, enriched)
 
             rdb.hset(f"task:{tid}", mapping={"status": "completed", "result": mom, "transcript": transcript, "participants": participants, "stage": "Готово", "cache_hit": cache_hit})
-            c.commit(message=msg)
-            print(f"✅ Задача [{tid}] выполнена! (Cache={cache_hit}, Длина={len(mom)} симв.)")
-        except Exception as e:
-            print(f"❌ Ошибка [{tid}]: {e}")
-            rdb.hset(f"task:{tid}", mapping={"status": "failed", "error": str(e)})
-            dlq_producer.produce(KAFKA_DLQ_TOPIC, key=tid.encode("utf-8"), value=json.dumps({"task": task, "error": str(e)}, ensure_ascii=False).encode("utf-8"))
-            dlq_producer.flush()
             rdb.expire(f"task:{tid}", CACHE_TTL_SEC)
             c.commit(message=msg)
             cleanup_media_files(fname)
@@ -229,7 +227,6 @@ def main():
                 dlq_producer.flush()
                 c.commit(message=msg)
                 cleanup_media_files(fname)
-
 
 if __name__ == "__main__":
     main()
