@@ -1,4 +1,4 @@
-﻿# --- Секреты и локальные конфиги ---
+# --- Секреты и локальные конфиги ---
 .env
 .env.*
 !.env.example
@@ -43,3 +43,6 @@ zap_report.html
 models/
 
 tmp_media/
+
+# --- IDE Cursor ---
+.cursorignore
