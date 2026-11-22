@@ -2,9 +2,6 @@
 .env
 .env.*
 !.env.example
-vpn/*.conf
-vpn/config.json
-vpn/servers.txt
 *.pem
 *.key
 
@@ -46,3 +43,8 @@ tmp_media/
 
 # --- IDE Cursor ---
 .cursorignore
+.roo/
+
+# --- Резервные копии и локальные исключения ---
+backup/
+.rooignore

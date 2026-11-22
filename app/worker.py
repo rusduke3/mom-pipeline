@@ -142,15 +142,18 @@ def extract_wav(src_path: Path) -> Path:
 
 
 def get_video_duration(src_path: Path) -> float | None:
-    """Определяет длительность видео через ffprobe. Возвращает None при ошибке."""
-    cmd = [
-        str(FFPROBE_BIN),
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        str(src_path),
-    ]
+    """Определяет длительность видео через ffprobe/ffmpeg. Возвращает None при ошибке."""
+    _DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d{2}):(\d+(?:\.\d+)?)")
+
+    # Шаг 1: пробуем ffprobe
     try:
+        cmd = [
+            str(FFPROBE_BIN),
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(src_path),
+        ]
         res = subprocess.run(
             cmd,
             check=True,
@@ -159,10 +162,39 @@ def get_video_duration(src_path: Path) -> float | None:
             encoding="utf-8",
             errors="replace",
         )  # nosec B603
-        return float(res.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError, OSError) as e:
-        print(f"ffprobe не смог определить длительность ({e}) — фолбэк на первые 60 секунд")
-        return None
+        duration_str = res.stdout.strip()
+        if duration_str:
+            return float(duration_str)
+    except (subprocess.CalledProcessError, ValueError, OSError):
+        pass  # ffprobe недоступен или ошибка — переходим к ffmpeg fallback
+
+    # Шаг 2: ffmpeg fallback — парсим Duration: HH:MM:SS.ms из stderr
+    ffmpeg_exe = str(FFMPEG_BIN)
+    try:
+        res = subprocess.run(
+            [ffmpeg_exe, "-hide_banner", "-i", str(src_path)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )  # nosec B603
+        stderr = res.stderr
+        m = _DURATION_RE.search(stderr)
+        if m:
+            hours = int(m.group(1))
+            minutes = int(m.group(2))
+            seconds = float(m.group(3))
+            duration = hours * 3600 + minutes * 60 + seconds
+            if duration > 0:
+                return duration
+    except (OSError, ValueError):
+        pass  # ffmpeg недоступен или не смог распарсить Duration
+
+    # Шаг 3: фолбэк на первые 60 секунд
+    print("ffprobe и ffmpeg не смогли определить длительность — фолбэк на первые 60 секунд")
+    return None
 
 
 def extract_video_frames(src_path: Path, max_frames: int = 3) -> list[str]:

@@ -1,4 +1,4 @@
-﻿name: DevSecOps Security Pipeline (SAST & Secrets)
+name: DevSecOps Security Pipeline (SAST & Secrets)
 
 on:
   push:

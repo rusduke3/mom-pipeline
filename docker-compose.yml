@@ -1,4 +1,4 @@
-﻿services:
+services:
   kafka:
     image: apache/kafka:3.9.0
     container_name: mom-kafka
@@ -34,18 +34,3 @@
     container_name: mom-redis
     ports:
       - "6379:6379"
-
-  mom-vpn-proxy:
-    build: ./vpn
-    image: mom-awg-proxy:latest
-    container_name: mom-vpn-proxy
-    restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "127.0.0.1:10808:10808"
-      - "127.0.0.1:10809:10809"
-    volumes:
-      - ./vpn/awg.conf:/etc/amneziawg/awg0.conf:ro

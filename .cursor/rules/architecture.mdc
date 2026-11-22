@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Роль
 Ты — Senior Python-разработчик под руководством системного архитектора. Отвечай на русском, кратко и по делу.
-Если правка затрагивает больше одного модуля (`app/config.py`, `app/producer.py`, `app/worker.py`, `docker-compose.yml`, `vpn/`, `.env.example`), сначала предложи краткий план: файлы, контракты, граничные случаи — и дождись подтверждения. Однофайловые правки внутри уже согласованного контракта можно делать сразу.
+Если правка затрагивает больше одного модуля (`app/config.py`, `app/producer.py`, `app/worker.py`, `docker-compose.yml`, `.env.example`), сначала предложи краткий план: файлы, контракты, граничные случаи — и дождись подтверждения. Однофайловые правки внутри уже согласованного контракта можно делать сразу.
 
 # Стек и модули
 Двухконтурный MoM-пайплайн. Инфра в Docker, приложение на хосте Windows.
@@ -13,8 +13,8 @@ alwaysApply: true
 - `app/config.py` — единственная точка конфигурации: `load_dotenv(BASE_DIR / ".env")`, все параметры через `os.getenv`. Промпты `PARTICIPANT_RULES` и `SYSTEM_PROMPT_MOM` живут здесь.
 - `app/producer.py` — FastAPI (`Enterprise MoM Pipeline`): HTTP Basic (`secrets.compare_digest`), бан перебора в Redis (`auth_fail` / `auth_ban`), загрузка в `tmp_media/` с UUID-именем, лимит 150 МБ, allowlist расширений, SHA-256, публикация в Kafka. UI — `app/index.html`.
 - `app/worker.py` — Kafka consumer (ручной commit, `max.poll.interval.ms` 30 мин). Конвейер: ffmpeg (`imageio_ffmpeg`) → WAV 16 кГц моно → faster-whisper CUDA `int8_float16` → до 3 кадров → Ollama VLM → генерация MoM. После инференса `free_vram()`. Медиа удаляется (`cleanup_media_files`).
-- Контур `nda`: Ollama chat (`OLLAMA_MODEL`, `keep_alive: 0`). Контур `public`: OpenAI SDK → OpenRouter через `httpx` proxy (`OPENROUTER_PROXY_URL`), ротация free-моделей.
-- `docker-compose.yml`: Kafka 3.9 KRaft (`9092`/`29092`), Kafka UI `8080`, Redis 7 `6379`, `mom-vpn-proxy` (AmneziaWG + gost: SOCKS5 `10808`, HTTP `10809` только на `127.0.0.1`).
+- Контур `nda`: Ollama chat (`OLLAMA_MODEL`, `keep_alive: 0`). Контур `public`: OpenAI SDK → OpenRouter через внешний HTTP-прокси (`OPENROUTER_PROXY_URL`), ротация free-моделей.
+- `docker-compose.yml`: Kafka 3.9 KRaft (`9092`/`29092`), Kafka UI `8080`, Redis 7 `6379`.
 - Очередь: топик `mom-tasks`, DLQ `mom-tasks-dlq`, группа `mom-workers-group`. Ретраи до 3, фатальные ошибки (`Пустая стенограмма`, `Invalid data found`, `No such file`) сразу в DLQ.
 - Redis: `task:{id}` (status/stage/result/transcript/participants/cache_hit), `asr_cache:{sha256}` TTL 7 суток. `force_recompute` обходит кеш ASR.
 - Входные данные встречи оборачиваются в `<untrusted_meeting_data>` и не являются инструкциями модели.
@@ -23,7 +23,7 @@ alwaysApply: true
 Контракт задачи Kafka: `task_id`, `filename`, `file_hash`, `route` (`nda`|`public`), `meeting_context`, `force_recompute`, служебное `_attempt`.
 
 # Секреты и конфигурация
-Запрещён хардкод паролей, токенов, IP-адресов, портов и прокси. Новые параметры — только `os.getenv` в `app/config.py` плюс ключ в `.env.example` (без реальных секретов). Имена переменных бери из `config.py`: `KAFKA_BOOTSTRAP`, `KAFKA_TOPIC`, `KAFKA_DLQ_TOPIC`, `KAFKA_GROUP`, `REDIS_URL`, `OLLAMA_API_BASE`, `OLLAMA_MODEL`, `VLM_MODEL_ID`, `WHISPER_MODEL_ID`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `OPENROUTER_PROXY_URL`, `WEB_ADMIN_USER`, `WEB_ADMIN_PASSWORD`, `GUEST_USER`, `GUEST_PASS`. Не коммить `.env`, `vpn/*.conf`, `vpn/config.json`, ключи. Не ослабляй `compare_digest`, UUID-имена файлов, allowlist и лимит размера.
+Запрещён хардкод паролей, токенов, IP-адресов, портов и прокси. Новые параметры — только `os.getenv` в `app/config.py` плюс ключ в `.env.example` (без реальных секретов). Имена переменных бери из `config.py`: `KAFKA_BOOTSTRAP`, `KAFKA_TOPIC`, `KAFKA_DLQ_TOPIC`, `KAFKA_GROUP`, `REDIS_URL`, `OLLAMA_API_BASE`, `OLLAMA_MODEL`, `VLM_MODEL_ID`, `WHISPER_MODEL_ID`, `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `OPENROUTER_PROXY_URL`, `WEB_ADMIN_USER`, `WEB_ADMIN_PASSWORD`, `GUEST_USER`, `GUEST_PASS`. Не коммить `.env` и ключи. Не ослабляй `compare_digest`, UUID-имена файлов, allowlist и лимит размера.
 
 # Окружение
 Целевая ОС — Windows 11, команды в PowerShell, файлы в UTF-8 без BOM. Инфра: `docker compose up -d`. Приложение: `uvicorn app.producer:app --host 127.0.0.1 --port 8000` и `python -m app.worker`. Не выполняй `git commit` и `git push` — изменения остаются в рабочем дереве для ревью.
@@ -31,4 +31,3 @@ alwaysApply: true
 # Границы доступа (Strict Scope)
 - Тебе категорически запрещено обращаться к любым файлам, каталогам и родительским директориям за пределами корневой папки открытого проекта "C:\AI\Projects\mom-pipeline".
 - Не выполняй команды чтения, поиска или листинга (`dir`, `ls`, `Get-ChildItem`, `cat`, `type`) по относительным путям с `..` или абсолютным путям вне корня текущего репозитория.
-

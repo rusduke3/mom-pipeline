@@ -1,4 +1,4 @@
-﻿repos:
+repos:
   - repo: local
     hooks:
       - id: bandit-sast
@@ -9,6 +9,6 @@
         language: system
 
       - id: block-secrets-files
-        name: Block .env and VPN private configs
-        entry: .venv/Scripts/python.exe -c "import sys; bad=[f for f in sys.argv[1:] if f=='.env' or f.endswith('.conf') or f=='vpn/config.json']; sys.exit(1 if bad else 0)"
+        name: Block .env and private configs
+        entry: .venv/Scripts/python.exe -c "import sys; bad=[f for f in sys.argv[1:] if f=='.env' or f.endswith('.conf')]; sys.exit(1 if bad else 0)"
         language: system
