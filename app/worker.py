@@ -57,8 +57,10 @@ dlq_producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
 # Параметры кеширования, ретраев и фильтрации медиафайлов
 CACHE_TTL_SEC = 7 * 24 * 3600
 MAX_RETRIES = 3
-NON_RETRYABLE_ERRORS = ("Пустая стенограмма", "Invalid data found", "No such file")
+NON_RETRYABLE_ERRORS = ("Пустая стенограмма", "Invalid data found", "No such file", "Повреждённый медиафайл")
 AUDIO_EXTS = {".m4a", ".mp3", ".wav", ".ogg", ".flac", ".aac", ".wma"}
+VALID_ROUTES = {"nda", "public"}
+FFMPEG_STDERR_LIMIT = 2000
 
 
 def free_vram() -> None:
@@ -85,11 +87,27 @@ def cleanup_media_files(filename: str) -> None:
 
 
 def extract_wav(src_path: Path) -> Path:
-    """Извлекает звуковую дорожку из медиафайла в формат WAV (16 кГц, моно) для Whisper."""
+    """Извлекает звуковую дорожку в WAV (16 кГц, моно). Повреждённые файлы — фатальная ошибка."""
     wav_path = src_path.with_suffix(".wav")
     ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [ffmpeg_exe, "-y", "-i", str(src_path), "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", str(wav_path)]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)  # nosec B603
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            encoding="utf-8",
+            errors="replace",
+        )  # nosec B603
+    except subprocess.CalledProcessError as e:
+        # Ограничиваем длину лога, чтобы не забить Redis/DLQ
+        tail = " ".join((e.stderr or "").split())[-FFMPEG_STDERR_LIMIT:]
+        raise RuntimeError(f"Повреждённый медиафайл (ffmpeg): {tail}") from e
+
+    # Заголовок PCM WAV занимает 44 байта: меньший размер означает пустой/битый файл
+    if not wav_path.exists() or wav_path.stat().st_size <= 44:
+        raise RuntimeError("Повреждённый медиафайл (ffmpeg): пустой или отсутствующий WAV")
     return wav_path
 
 
@@ -201,7 +219,7 @@ def generate_mom(route: str, enriched_text: str) -> str:
         )
         resp.raise_for_status()
         raw = resp.json().get("message", {}).get("content", "")
-    else:
+    elif route == "public":
         # Открытый контур: облачный API с ротацией бесплатных моделей через изолированный SOCKS5-прокси
         client = OpenAI(
             http_client=httpx.Client(proxy=OPENROUTER_PROXY_URL, timeout=120.0) if OPENROUTER_PROXY_URL else None,
@@ -234,6 +252,9 @@ def generate_mom(route: str, enriched_text: str) -> str:
                 last_err = e
         if not raw.strip():
             raise RuntimeError(f"Все облачные модели перегружены: {last_err}")
+    else:
+        # Defense-in-depth: неизвестный маршрут не должен уходить в облако
+        raise RuntimeError(f"Недопустимый маршрут: {route}")
 
     # Вырезаем возможные внутренние теги рассуждений (<think>...</think>)
     return re.sub(r"(?s)<think>.*?</think>\s*", "", raw).strip()
@@ -251,7 +272,8 @@ def main():
     c.subscribe([KAFKA_TOPIC])
     print("Direct Python Worker запущен (без ComfyUI, Whisper CUDA + Ollama VLM/LLM)...")
     for k in rdb.scan_iter("task:*"):
-        if rdb.hget(k, "status") in ("processing", "queued"):
+        # Трогаем только зависшие processing; queued остаются в очереди Kafka
+        if rdb.hget(k, "status") == "processing":
             rdb.hset(k, mapping={"status": "failed", "error": "Задача прервана перезапуском воркера"})
 
     while True:
@@ -260,8 +282,28 @@ def main():
             continue
 
         task = json.loads(msg.value().decode("utf-8"))
-        tid, route, fname = task["task_id"], task["route"], task["filename"]
+        tid = task.get("task_id", "")
+        route = task.get("route")
+        fname = task.get("filename", "")
         fhash, ctx = task.get("file_hash", ""), task.get("meeting_context", "")
+
+        # Строгая валидация маршрута: неизвестный контур сразу в DLQ без ретраев
+        if not isinstance(route, str) or route not in VALID_ROUTES:
+            err_text = f"Недопустимый маршрут: {route!r}"
+            print(f"Задача [{tid}] отклонена: {err_text}")
+            rdb.hset(f"task:{tid}", mapping={"status": "failed", "error": err_text})
+            rdb.expire(f"task:{tid}", CACHE_TTL_SEC)
+            dlq_producer.produce(
+                KAFKA_DLQ_TOPIC,
+                key=tid.encode("utf-8"),
+                value=json.dumps({"task": task, "error": err_text}, ensure_ascii=False).encode("utf-8"),
+            )
+            dlq_producer.flush()
+            c.commit(message=msg)
+            if fname:
+                cleanup_media_files(fname)
+            continue
+
         print(f"\nЗадача [{tid}] | Контур: {route.upper()} | Hash: {fhash[:10]}")
 
         try:

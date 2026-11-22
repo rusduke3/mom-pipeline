@@ -13,7 +13,7 @@ import uuid
 import hashlib
 import secrets
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 import redis
 from confluent_kafka import Producer
@@ -22,6 +22,7 @@ from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from app.config import (
+    BASE_DIR,
     KAFKA_BOOTSTRAP,
     KAFKA_TOPIC,
     REDIS_URL,
@@ -82,7 +83,7 @@ def verify_auth(request: Request, credentials: HTTPBasicCredentials = Depends(se
 
 # Подставляем актуальные лимиты размера файла в HTML-шаблон при старте сервера
 HTML_PAGE = (
-    Path("app/index.html")
+    (BASE_DIR / "app" / "index.html")
     .read_text(encoding="utf-8")
     .replace("{MAX_MB}", str(MAX_FILE_SIZE_MB))
     .replace("{MAX_BYTES}", str(MAX_FILE_SIZE_BYTES))
@@ -98,7 +99,7 @@ async def index(user: str = Depends(verify_auth)):
 @app.post("/api/tasks")
 async def create_task(
     file: UploadFile = File(...),
-    route: str = Form("nda"),
+    route: Literal["nda", "public"] = Form("nda"),
     meeting_context: Optional[str] = Form(""),
     force_recompute: bool = Form(False),
     user: str = Depends(verify_auth),
@@ -110,7 +111,7 @@ async def create_task(
         raise HTTPException(status_code=400, detail=f"Неподдерживаемый формат: {ext}")
 
     # Генерируем безопасное имя файла на базе UUID для защиты от Path Traversal
-    task_id = str(uuid.uuid4())[:8]
+    task_id = uuid.uuid4().hex
     safe_name = f"{task_id}{ext}"
     target_path = TEMP_MEDIA_DIR / safe_name
 
