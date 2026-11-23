@@ -7,7 +7,7 @@
 - **Вход:** Веб-форма / Телефон (HTTPS через Nginx + Let's Encrypt + Fail2ban)
 - **Прием задач:** FastAPI Producer -> Redis (статусы и кеш ASR по SHA-256)
 - **Очередь:** Apache Kafka (KRaft + DLQ)
-- **Обработка:** Direct Python Worker (`app/worker.py`) с локальным GPU-конвейером (CTranslate2/faster-whisper для транскрибации и очистки VRAM, Ollama VLM `qwen2.5vl:7b` для анализа скриншотов ВКС)
+- **Обработка:** Direct Python Worker (`app/worker.py`) с локальным GPU-конвейером (CTranslate2/faster-whisper для транскрибации и очистки VRAM, Ollama VLM `qwen2.5vl:7b` для анализа скриншотов ВКС, Ollama `qwen3.6:35b` для формирования MoM)
 - **Маршрутизация LLM:** Локальная модель в контуре NDA или облачная через внешний HTTP-прокси (`OPENROUTER_PROXY_URL`) в контуре Public.
 
 ## Ключевые возможности и безопасность
