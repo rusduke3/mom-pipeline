@@ -2,6 +2,7 @@
 
 Двухконтурная асинхронная система автоматического протоколирования встреч (MoM) с поддержкой локального **NDA** и облачного **Public** контуров.
 
+```mermaid
 flowchart TB
     User([👤 Пользователь / Веб-интерфейс]) -->|1. Аудио/Видео + Скрин + Режим NDA/Public| GW[⚡ API Gateway: FastAPI / OpenAPI]
     
@@ -35,6 +36,7 @@ flowchart TB
     subgraph SecOps [🛡️ Shift-Left DevSecOps & CI/CD]
         Git[GitHub Actions + Pre-commit] --- Tools[Gitleaks · Bandit · Semgrep · Unit Tests]
     end
+```
 
 
 
