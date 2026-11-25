@@ -1,27 +1,20 @@
 # AI MoM Enterprise Pipeline
 
 Двухконтурная асинхронная система автоматического протоколирования встреч (MoM) с поддержкой локального **NDA** и облачного **Public** контуров.
-Показать код
-
-Скрыть код
-
-Скачать диаграмму в формате SVG
-
-FLOWCHART
 
 flowchart TB
-    User([👤 Пользователь / Веб-интерфейс]) -->|1. Аудио/Видео + Скрин участников + Режим NDA/Public| GW[⚡ API Gateway: FastAPI / OpenAPI]
+    User([👤 Пользователь / Веб-интерфейс]) -->|1. Аудио/Видео + Скрин + Режим NDA/Public| GW[⚡ API Gateway: FastAPI / OpenAPI]
     
-    GW -->|2. SHA-256 хэш файла| Redis[(🚀 Redis Cache\nTTL 7 дней / Bypass flag)]
-    Redis -->|Cache HIT: мгновенный вывод на экран| User
+    GW -->|2. SHA-256 хэш файла| Redis[(🚀 Redis Cache<br/>TTL 7 дней / Bypass flag)]
+    Redis -->|Cache HIT: мгновенный вывод| User
     
-    Redis -->|Cache MISS: 202 Accepted + task_id| Kafka{{📨 Apache Kafka\nОчередь задач + DLQ}}
+    Redis -->|Cache MISS: 202 Accepted + task_id| Kafka{{📨 Apache Kafka<br/>Очередь задач + DLQ}}
     
     subgraph CommonStage [🔒 Общий локальный этап: закрытый контур]
         Kafka --> Worker[⚙️ Async Python Worker]
-        Worker --> STT[🎙️ Local Whisper Podlodka\nРаспознавание речи и ИТ-сленга]
-        Worker --> OCR[👁️ OCR Parser\nСписок участников со скриншота]
-        STT & OCR --> BaseProto[📋 Общий базовый протокол\nПервичная расшифровка встречи]
+        Worker --> STT[🎙️ Local Whisper Podlodka<br/>Распознавание речи и ИТ-сленга]
+        Worker --> OCR[👁️ OCR Parser<br/>Список участников со скриншота]
+        STT & OCR --> BaseProto[📋 Общий базовый протокол<br/>Первичная расшифровка встречи]
     end
 
     BaseProto -->|Кнопка в UI| TxtExport[📄 Скачивание транскрибации в .TXT]
@@ -29,19 +22,21 @@ flowchart TB
     
     subgraph NDABranch [🖥️ Ветка NDA: 2 локальных прогона Ollama / Qwen]
         direction TB
-        NDA1[Прогон 1: Сборка очищенной стенограммы\nВнутренний шаг — наружу не отдаётся] --> NDA2[Прогон 2: Сборка финального MoM\nДанные не покидают периметр GPU]
+        NDA1[Прогон 1: Сборка очищенной стенограммы<br/>Внутренний шаг — наружу не отдаётся] --> NDA2[Прогон 2: Сборка финального MoM<br/>Данные не покидают периметр GPU]
     end
 
     Router -->|Режим NDA: 152-ФЗ / 187-ФЗ| NDA1
-    Router -->|Режим Public: внешний контур| CloudBranch[☁️ Изолированный VPN-контейнер\nOpenRouter · модель Gemma\nПрямая сборка MoM из общего протокола]
+    Router -->|Режим Public: внешний контур| CloudBranch[☁️ Изолированный VPN-контейнер<br/>OpenRouter · модель Gemma<br/>Прямая сборка MoM из общего протокола]
     
     NDA2 & CloudBranch --> ScreenUI[🖥️ Вывод готового MoM на экран в UI]
-    ScreenUI -->|Кэширование в Redis + Автоудаление сырых медиа| Redis
+    ScreenUI -->|Кэширование в Redis + Автоудаление медиа| Redis
     ScreenUI -->|4. Готовый результат| User
 
     subgraph SecOps [🛡️ Shift-Left DevSecOps & CI/CD]
         Git[GitHub Actions + Pre-commit] --- Tools[Gitleaks · Bandit · Semgrep · Unit Tests]
     end
+
+
 
 ## Архитектура решения
 
