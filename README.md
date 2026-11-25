@@ -3,39 +3,33 @@
 Двухконтурная асинхронная система автоматического протоколирования встреч (MoM) с поддержкой локального **NDA** и облачного **Public** контуров.
 
 ```mermaid
-flowchart TB
-    User([👤 Пользователь / Веб-интерфейс]) -->|1. Аудио/Видео + Скрин + Режим NDA/Public| GW[⚡ API Gateway: FastAPI / OpenAPI]
-    
-    GW -->|2. SHA-256 хэш файла| Redis[(🚀 Redis Cache<br/>TTL 7 дней / Bypass flag)]
-    Redis -->|Cache HIT: мгновенный вывод| User
-    
-    Redis -->|Cache MISS: 202 Accepted + task_id| Kafka{{📨 Apache Kafka<br/>Очередь задач + DLQ}}
-    
-    subgraph CommonStage [🔒 Общий локальный этап: закрытый контур]
-        Kafka --> Worker[⚙️ Async Python Worker]
-        Worker --> STT[🎙️ Local Whisper Podlodka<br/>Распознавание речи и ИТ-сленга]
-        Worker --> OCR[👁️ OCR Parser<br/>Список участников со скриншота]
-        STT & OCR --> BaseProto[📋 Общий базовый протокол<br/>Первичная расшифровка встречи]
-    end
+flowchart LR
+    User([👤 Пользователь / UI]) -->|1. Медиа + Скрин + NDA/Public| GW[⚡ FastAPI Gateway]
+    GW -->|2. SHA-256| Redis[(🚀 Redis Cache<br/>TTL 7 дней)]
+    Redis -->|HIT| User
+    Redis -->|MISS: 202 + task_id| Kafka{{📨 Apache Kafka + DLQ}}
 
-    BaseProto -->|Кнопка в UI| TxtExport[📄 Скачивание транскрибации в .TXT]
-    BaseProto -->|3. Маршрутизация по политике ИБ| Router{🛡️ Security & Routing Policy}
-    
-    subgraph NDABranch [🖥️ Ветка NDA: 2 локальных прогона Ollama / Qwen]
+    subgraph Local [🔒 Общий локальный контур]
         direction TB
-        NDA1[Прогон 1: Сборка очищенной стенограммы<br/>Внутренний шаг — наружу не отдаётся] --> NDA2[Прогон 2: Сборка финального MoM<br/>Данные не покидают периметр GPU]
+        Kafka --> Worker[⚙️ Async Worker]
+        Worker --> STT[🎙️ Local Whisper Podlodka]
+        Worker --> OCR[👁️ OCR участников]
+        STT & OCR --> Proto[📋 Общий базовый протокол]
     end
 
-    Router -->|Режим NDA: 152-ФЗ / 187-ФЗ| NDA1
-    Router -->|Режим Public: внешний контур| CloudBranch[☁️ Изолированный VPN-контейнер<br/>OpenRouter · модель Gemma<br/>Прямая сборка MoM из общего протокола]
-    
-    NDA2 & CloudBranch --> ScreenUI[🖥️ Вывод готового MoM на экран в UI]
-    ScreenUI -->|Кэширование в Redis + Автоудаление медиа| Redis
-    ScreenUI -->|4. Готовый результат| User
+    Proto -.->|Кнопка в UI| Txt[📄 Скачать .TXT]
+    Proto -->|3. Политика ИБ| Router{🛡️ Маршрутизатор}
 
-    subgraph SecOps [🛡️ Shift-Left DevSecOps & CI/CD]
-        Git[GitHub Actions + Pre-commit] --- Tools[Gitleaks · Bandit · Semgrep · Unit Tests]
+    subgraph NDA [🖥️ Ветка NDA: Local GPU Ollama/Qwen]
+        direction TB
+        N1[Прогон 1: Стенограмма<br/>внутренний шаг] --> N2[Прогон 2: Финальный MoM<br/>152-ФЗ / 187-ФЗ]
     end
+
+    Router -->|NDA| N1
+    Router -->|Public| Cloud[☁️ VPN-контейнер<br/>OpenRouter · Gemma<br/>Сборка MoM в 1 прогон]
+
+    N2 & Cloud --> Out[🖥️ Вывод MoM на экран UI<br/>+ запись в Redis и удаление медиа]
+    Out -->|4. Результат| User
 ```
 
 
