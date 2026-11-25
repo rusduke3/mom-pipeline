@@ -18,6 +18,8 @@ import subprocess  # nosec B404: используется только для л
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv()
 import httpx
 import redis
 import requests
